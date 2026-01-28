@@ -1,35 +1,68 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
-    <meta charset="UTF-8">
-    <title>SMART on FHIR Launching...</title>
-    <script src="https://cdn.jsdelivr.net/npm/fhirclient/build/fhir-client.js"></script>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>啟動血脂管理決策系統</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/fhirclient@2.6.0/build/fhir-client.js"></script>
+    
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f8f9fa;
+        }
+        .loader {
+            text-align: center;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: #09d;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
 </head>
 <body>
-    <div style="font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh;">
-        <div style="border: 4px solid #f3f3f3; border-top: 4px solid #4f46e5; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite;"></div>
-        <p style="margin-top: 20px; color: #666;">正在連接 FHIR 醫療資料庫並進行安全性驗證...</p>
+    <div class="loader">
+        <div class="spinner"></div>
+        <p>正在透過醫學中心 EHR 安全認證中...</p>
     </div>
 
     <script>
-        // SMART on FHIR 啟動邏輯
+        /**
+         * SMART on FHIR 啟動配置
+         * 參考《1014_SMART測試環境與上架流程》Page 33 & 44
+         */
         FHIR.oauth2.authorize({
-            // 比賽時，這裡會填入你在開發者平台註冊的 Client ID
-            "clientId": "smart-claim-pro-app", 
-            
-            // 要求的權限 (Scope): 讀取病患資料、診斷、檢驗、藥物
-            "scope": "patient/*.read user/Patient.read openid fhirUser profile",
-            
-            // 授權成功後的導向頁面 (就是你的主程式)
-            "redirectUri": "index.html",
-            
-            // 對應的 FHIR Server 類型 (自動偵測)
-            "iss": new URLSearchParams(window.location.search).get("iss")
+            // 1. Client ID: 在醫院 EMR 或 Sandbox 註冊時獲得的 ID
+            clientId: "my_lipid_decision_app", 
+
+            // 2. Scope: 權限範圍。資安認證要求「最小權限原則」
+            // launch: 獲取當前上下文
+            // patient/*.read: 讀取該病人的基本資料、檢驗(LDL)、診斷(Conditions)
+            // openid / fhirUser: 驗證使用者身分
+            scope: "launch openid fhirUser patient/Patient.read patient/Observation.read patient/Condition.read", 
+
+            // 3. Redirect URI: 授權成功後跳轉回您的 index.html
+            // 注意：上架時此 URL 必須與註冊的完全一致 (支援 https)
+            redirectUri: "index.html",
+
+            // 4. PKCE 選項: v2 版本預設會開啟，增強行動端與單頁應用的資安
+            pkceMode: "unsafe-fallback" // 在某些不支援 WebCrypto 的舊 EMR 環境中自動回退
         });
     </script>
-
-    <style>
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    </style>
 </body>
 </html>
