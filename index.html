@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>2025 血脂管理決策系統 - THAS 版</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        .clickable-row { cursor: pointer; }
+        .clickable-row:hover { background-color: #f8f9fa; }
+        .risk-tag { width: 110px; text-align: center; }
+        #loading-status { color: blue; font-weight: bold; }
+        .detail-section { margin-bottom: 1.5rem; }
+        .medication-item { font-size: 0.9rem; }
+        #ldl-chart { max-height: 250px; margin-top: 1rem; }
+    </style>
+</head>
+<body class="bg-light">
+
+<div class="container-fluid py-4">
+    <div class="row">
+        <div class="col-lg-7">
+            <div class="card shadow-sm">
+                <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                    <span>即時病患清單 (THAS FHIR Server)</span>
+                    <span id="loading-status">資料讀取中...</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>姓名</th>
+                                <th>風險等級</th>
+                                <th>最新 LDL-C</th>
+                                <th>目標值</th>
+                                <th>狀態</th>
+                            </tr>
+                        </thead>
+                        <tbody id="patient-list"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-5">
+            <div id="detail-pane" class="card shadow-sm p-4" style="display:none; min-height: 650px;">
+                <h3 id="det-name" class="text-primary fw-bold"></h3>
+                <hr>
+                <div class="detail-section">
+                    <h6><span class="badge bg-secondary mb-2">臨床診斷</span></h6>
+                    <p id="det-cond" class="small mb-0"></p>
+                </div>
+                
+                <div class="detail-section">
+                    <h6><span class="badge bg-primary mb-2">LDL-C 指標</span></h6>
+                    <div class="h4 mb-2">
+                        目前: <span id="det-ldl" class="text-danger fw-bold"></span> mg/dL 
+                        <small class="text-muted">/ 目標: <span id="det-target"></span> mg/dL</small>
+                    </div>
+                    
+                    <!-- 進度條：LDL-C 達成百分比 -->
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between small mb-1">
+                            <span>LDL-C 達成進度</span>
+                            <span id="progress-text"></span>
+                        </div>
+                        <div class="progress" style="height: 20px;">
+                            <div id="progress-bar" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 柱狀圖：目前 vs 目標 -->
+                <div class="detail-section">
+                    <h6><span class="badge bg-info mb-2">LDL-C 差距圖</span></h6>
+                    <canvas id="ldl-chart"></canvas>
+                </div>
+                
+                <div class="detail-section">
+                    <h6><span class="badge bg-success mb-2">目前用藥清單</span></h6>
+                    <ul id="det-medications" class="list-group list-group-flush small"></ul>
+                </div>
+                
+                <div class="alert alert-info mt-3">
+                    <strong>2025 共識具體治療建議：</strong>
+                    <pre id="det-advice" class="mb-0 small" style="white-space: pre-wrap; font-family: inherit;"></pre>
+                </div>
+            </div>
+            <div id="placeholder" class="text-center mt-5 text-muted">
+                <h5>請點擊左側病人查看詳細病例與建議</h5>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const FHIR_BASE = "https://thas.mohw.gov.tw/v/r4/fhir";
+    
+    const patientIds = [
+        'liu-dong-cai-001',
+        'chen-wei-hua-002',
+        'chen-jun-da-003',
+        'tsai-xiu-li-004'
+    ];
+    
+    let patientDataStore = {};
+    let chartInstance = null; // 用來儲存 Chart.js 實例，避免重複建立
+
+    function hasCondition(conditions, keywords) {
+        return conditions.some(cond => {
+            const text = (cond.code?.text || '').toLowerCase();
+            const coding = cond.code?.coding || [];
+            return keywords.some(kw => 
+                text.includes(kw.toLowerCase()) ||
+                coding.some(c => 
+                    (c.code || '').includes(kw) || 
+                    (c.display || '').toLowerCase().includes(kw.toLowerCase())
+                )
+            );
+        });
+    }
+
+    function calculateRiskLevel(patient, conditions, observations, medications, ldl) {
+        let age = 0;
+        if (patient.birthDate) {
+            const birthDate = new Date(patient.birthDate);
+            const today = new Date();
+            age = Math.floor((today - birthDate) / (365.25 * 24 * 60 * 60 * 1000));
+        }
+        const gender = patient.gender || 'unknown';
+
+        const latestObservations = {};
+        observations.forEach(obs => {
+            const code = obs.code?.coding?.[0]?.code || obs.code?.text || '';
+            if (obs.valueQuantity && obs.effectiveDateTime) {
+                if (!latestObservations[code] || new Date(obs.effectiveDateTime) > new Date(latestObservations[code].effectiveDateTime)) {
+                    latestObservations[code] = obs;
+                }
+            }
+        });
+
+        const ldlC    = latestObservations['13457-7']?.valueQuantity?.value || null;
+        const hdlC    = latestObservations['2085-9']?.valueQuantity?.value || null;
+        const sysBP   = latestObservations['8480-6']?.valueQuantity?.value || null;
+        const diaBP   = latestObservations['8462-4']?.valueQuantity?.value || null;
+        const eGFR    = latestObservations['50044-7']?.valueQuantity?.value || latestObservations['69405-9']?.valueQuantity?.value || null;
+
+        let riskFactors = 0;
+        if (sysBP >= 130 || diaBP >= 85) riskFactors++;
+        if (hdlC && ((gender === 'male' && hdlC < 40) || (gender === 'female' && hdlC < 50))) riskFactors++;
+        if (age >= (gender === 'male' ? 45 : 55)) riskFactors++;
+        if (hasCondition(conditions, ['抽菸', 'smoking', 'tobacco'])) riskFactors++;
+        if (hasCondition(conditions, ['早發家族史', 'family history premature CAD'])) riskFactors++;
+        if (hasCondition(conditions, ['代謝症候群', 'metabolic syndrome'])) riskFactors++;
+        if (hasCondition(conditions, ['肥胖', 'obesity', '腹部肥胖'])) riskFactors++;
+
+        let risk = "低風險";
+        let target = 130;
+        let color = "success";
+        let advice = "生活型態調整，定期追蹤";
+
+        if (hasCondition(conditions, ['多支血管阻塞', '一年內心肌梗塞', '≥2次心肌梗塞', '急性冠心症合併糖尿病', '周邊動脈疾病合併冠心病'])) {
+            risk = "極高風險";
+            target = 55;
+            color = "danger";
+            advice = "1. 立即起始高強度 Statin（如 Atorvastatin 40-80 mg 或 Rosuvastatin 20-40 mg）。\n2. 若 6-8 週後 LDL-C 未降至 <55 mg/dL，合併 Ezetimibe 10 mg。\n3. 若仍未達標，考慮 PCSK9 抑制劑（如 Evolocumab）或 Inclisiran（siRNA）。\n4. 追蹤肝功能及 CK 值，每 3 個月一次。";
+        }
+        else if (hasCondition(conditions, ['心肌梗塞', '中風', '腦中風', '周邊動脈疾病', 'PCI', 'CABG', 'ASCVD', '斑塊 ≥50%', '狹窄 ≥50%'])) {
+            risk = "非常高風險";
+            target = 70;
+            color = "warning";
+            advice = "1. 起始高強度 Statin（如 Atorvastatin 40-80 mg）。\n2. 若未達標，合併 Ezetimibe 10 mg。\n3. 目標 LDL-C <70 mg/dL，追蹤 6-8 週後調整劑量。\n4. 強調生活型態介入（如飲食控制與運動）。";
+        }
+        else if (hasCondition(conditions, ['糖尿病', '慢性腎臟病', 'CKD']) || (ldlC && ldlC >= 190) || (eGFR && eGFR < 60)) {
+            risk = "高風險";
+            target = 100;
+            color = "primary";
+            advice = "1. 起始中至高強度 Statin（如 Atorvastatin 20-40 mg）。\n2. 若 LDL-C >100 mg/dL，考慮合併 Ezetimibe 或 Bempedoic Acid。\n3. 每 6 個月追蹤血脂與腎功能。\n4. 加強糖尿病與血壓控制。";
+        }
+        else if (riskFactors >= 2) {
+            risk = "中風險";
+            target = 115;
+            color = "info";
+            advice = "1. 生活型態改變 3-6 個月（低脂、低糖飲食、規律運動、體重控制）。\n2. 若 LDL-C 仍 >115 mg/dL，考慮起始中強度 Statin（如 Atorvastatin 10-20 mg）。\n3. 每 6-12 個月追蹤血脂。\n4. 優先戒菸與血壓管理。";
+        }
+        else {
+            risk = "低風險";
+            target = 130;
+            color = "success";
+            advice = "1. 生活型態調整（健康飲食、規律運動、避免高膽固醇食物）。\n2. 無需立即用藥，定期追蹤血脂每 12 個月。\n3. 若有危險因子，建議控制血壓與戒菸。";
+        }
+
+        if (ldl !== 'N/A' && parseFloat(ldl) > target) {
+            advice += "\n\n【目前 LDL-C 未達標】建議立即評估調整治療方案，並在 6-8 週後複檢血脂。";
+        }
+
+        return { risk, target, color, advice };
+    }
+
+    async function loadAllPatients() {
+        const listBody = document.getElementById('patient-list');
+        listBody.innerHTML = "";
+
+        for (const id of patientIds) {
+            try {
+                const pRes = await fetch(`${FHIR_BASE}/Patient/${id}`)
+                    .catch(() => { throw new Error('病人資料讀取失敗，請檢查網路或伺服器'); });
+                if (!pRes.ok) throw new Error(`病人資料讀取失敗: ${pRes.status}`);
+                const patient = await pRes.json();
+
+                const cRes = await fetch(`${FHIR_BASE}/Condition?patient=Patient/${id}`)
+                    .catch(() => { throw new Error('診斷資料讀取失敗，請檢查網路或伺服器'); });
+                const cBundle = await cRes.json();
+                const conditions = cBundle.entry ? cBundle.entry.map(e => e.resource) : [];
+                const condText = conditions.map(c => c.code?.text || '未知診斷').join(', ') || '無診斷資料';
+
+                const oRes = await fetch(`${FHIR_BASE}/Observation?patient=Patient/${id}&code=13457-7,2085-9,8480-6,8462-4,50044-7,69405-9,2887-8&_sort=-date`)
+                    .catch(() => { throw new Error('檢驗資料讀取失敗，請檢查網路或伺服器'); });
+                const oBundle = await oRes.json();
+                const observations = oBundle.entry ? oBundle.entry.map(e => e.resource) : [];
+
+                const ldlObs = observations.find(obs => obs.code?.coding?.[0]?.code === '13457-7' || obs.code?.text?.toLowerCase().includes('ldl'));
+                const ldl = ldlObs ? ldlObs.valueQuantity?.value : 'N/A';
+
+                const mRes = await fetch(`${FHIR_BASE}/MedicationRequest?patient=Patient/${id}`)
+                    .catch(() => { throw new Error('用藥資料讀取失敗，請檢查網路或伺服器'); });
+                const mBundle = await mRes.json();
+                const medications = mBundle.entry ? mBundle.entry.map(e => e.resource.medicationCodeableConcept?.text || '未知藥物') : [];
+
+                const { risk, target, color, advice } = calculateRiskLevel(patient, conditions, observations, medications, ldl);
+
+                patientDataStore[id] = { name: patient.name?.[0]?.text || '未知姓名', risk, target, ldl, cond: condText, advice, color, medications };
+
+                const status = (ldl !== 'N/A' && parseFloat(ldl) > target) ? '🔴 未達標' 
+                              : (ldl !== 'N/A' ? '🟢 已達標' : 'N/A');
+                listBody.innerHTML += `
+                    <tr class="clickable-row" onclick="showDetail('${id}')">
+                        <td><strong>${patient.name?.[0]?.text || '未知'}</strong></td>
+                        <td><span class="badge bg-${color} risk-tag">${risk}</span></td>
+                        <td>${ldl}</td>
+                        <td>${target}</td>
+                        <td>${status}</td>
+                    </tr>
+                `;
+            } catch (e) {
+                console.error(`讀取病人 ${id} 失敗`, e);
+                listBody.innerHTML += `
+                    <tr>
+                        <td colspan="5" class="text-danger">讀取 ${id} 失敗: ${e.message}</td>
+                    </tr>
+                `;
+            }
+        }
+        document.getElementById('loading-status').innerText = "資料更新完成";
+    }
+
+    function showDetail(id) {
+        const data = patientDataStore[id];
+        if (!data) return;
+
+        document.getElementById('placeholder').style.display = 'none';
+        document.getElementById('detail-pane').style.display = 'block';
+
+        document.getElementById('det-name').innerText = data.name;
+        document.getElementById('det-cond').innerText = data.cond;
+        document.getElementById('det-ldl').innerText = data.ldl;
+        document.getElementById('det-target').innerText = data.target;
+        document.getElementById('det-advice').innerText = data.advice;
+
+        // 用藥清單
+        const medList = document.getElementById('det-medications');
+        medList.innerHTML = '';
+        if (data.medications.length > 0) {
+            data.medications.forEach(med => {
+                medList.innerHTML += `<li class="list-group-item medication-item">${med}</li>`;
+            });
+        } else {
+            medList.innerHTML = '<li class="list-group-item text-muted">無用藥記錄</li>';
+        }
+
+        // 進度條計算
+        const ldlValue = data.ldl !== 'N/A' ? parseFloat(data.ldl) : 0;
+        const targetValue = parseFloat(data.target);
+        let percentage = targetValue > 0 ? Math.min((targetValue / ldlValue) * 100, 150) : 0; // 避免除以 0
+        let progressColor = 'bg-success';
+        let progressText = '達成率：' + percentage.toFixed(0) + '%';
+
+        if (ldlValue > targetValue) {
+            progressColor = 'bg-danger';
+            progressText = '未達標 (' + (ldlValue - targetValue).toFixed(1) + ' mg/dL 差距)';
+            percentage = Math.min(100 - ((ldlValue - targetValue) / targetValue * 100), 100);
+        } else if (percentage > 100) {
+            progressColor = 'bg-success';
+            progressText = '已超標達成 (' + (percentage - 100).toFixed(0) + '%)';
+        }
+
+        const progressBar = document.getElementById('progress-bar');
+        progressBar.style.width = percentage + '%';
+        progressBar.className = 'progress-bar ' + progressColor;
+        progressBar.setAttribute('aria-valuenow', percentage);
+        document.getElementById('progress-text').innerText = progressText;
+
+        // 柱狀圖
+        const ctx = document.getElementById('ldl-chart').getContext('2d');
+        if (chartInstance) chartInstance.destroy(); // 銷毀舊圖表
+
+        chartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['目前 LDL-C', '目標值'],
+                datasets: [{
+                    label: 'LDL-C (mg/dL)',
+                    data: [ldlValue, targetValue],
+                    backgroundColor: [ldlValue > targetValue ? 'rgba(220, 53, 69, 0.8)' : 'rgba(40, 167, 69, 0.8)', 'rgba(0, 123, 255, 0.6)'],
+                    borderColor: [ldlValue > targetValue ? 'rgb(220, 53, 69)' : 'rgb(40, 167, 69)', 'rgb(0, 123, 255)'],
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { beginAtZero: true, title: { display: true, text: 'mg/dL' } }
+                },
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
+    }
+
+    // 啟動載入
+    loadAllPatients();
+</script>
+
+</body>
+</html>
