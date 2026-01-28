@@ -87,4 +87,105 @@
     </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/fhirclient@2.5.2/dist/fhir-client
+<script src="https://cdn.jsdelivr.net/npm/fhirclient@2.5.2/dist/fhir-client.min.js"></script>
+<script>
+    // 檢查 URL 參數
+    const urlParams = new URLSearchParams(window.location.search);
+    const iss = urlParams.get('iss');
+    const launch = urlParams.get('launch');
+    
+    // 如果有 mode=mock，直接進入測試模式
+    if (urlParams.get('mode') === 'mock') {
+        goMock();
+        return;
+    }
+
+    // THAS Client ID - 註冊後替換這裡
+    const CLIENT_ID = '脂安通-2026-lipidsafe';  // ← 你的真實 THAS Client ID
+
+    // SMART on FHIR 啟動
+    if (iss && FHIR.oauth2) {
+        document.getElementById('status').textContent = '偵測到 THAS 啟動，正在授權...';
+        
+        FHIR.oauth2.authorize({
+            'iss': iss,
+            'launch': launch,
+            'client_id': CLIENT_ID,
+            'redirect_uri': window.location.origin + '/LipidSafe/index.html',
+            'scope': 'launch/patient patient/Patient.read patient/Condition.read patient/Observation.read patient/MedicationRequest.read',
+            'iss_match': 'any',
+            'pkceMode': 'ifSupported'
+        }).then(client => {
+            console.log('✅ 脂安通 SMART Launch 成功！', client);
+            document.getElementById('status').innerHTML = '<div class="text-success">授權成功！<br>即將進入血脂決策系統...</div>';
+            setTimeout(() => {
+                window.location.href = '/LipidSafe/index.html';
+            }, 2000);
+        }).catch(err => {
+            console.error('❌ SMART Launch 失敗:', err);
+            showError(err);
+        });
+    } else {
+        // 沒有 iss，顯示註冊指引
+        showRegisterGuide();
+    }
+
+    function showError(err) {
+        const spinner = document.getElementById('spinner');
+        const statusEl = document.getElementById('status');
+        const mockBtn = document.getElementById('mockBtn');
+        
+        spinner.style.display = 'none';
+        mockBtn.style.display = 'block';
+        
+        if (CLIENT_ID === '脂安通-2026-lipidsafe') {
+            statusEl.innerHTML = `
+                <div class="alert alert-warning error-box">
+                    <h6>⚠️ 需要 THAS Client ID 才能連線</h6>
+                    <p><strong>步驟1:</strong> 點擊上方「測試模式」先驗證 UI</p>
+                    <p><strong>步驟2:</strong> 前往 <a href="https://thas.mohw.gov.tw" target="_blank" class="text-decoration-none">THAS 開發者入口</a> 註冊</p>
+                    <p><strong>步驟3:</strong> 填入 App 資訊：<br>
+                    • 名稱：脂安通<br>
+                    • Redirect URI：${window.location.origin}/LipidSafe/index.html</p>
+                    <p><small>取得 Client ID 後替換程式碼第 85 行</small></p>
+                </div>
+            `;
+        } else {
+            statusEl.innerHTML = `
+                <div class="alert alert-danger error-box">
+                    <h6>🚨 授權錯誤</h6>
+                    <p><strong>${err.message || '未知錯誤'}</strong></p>
+                    <p><small>按 F12 查看 Console 詳細錯誤訊息</small></p>
+                </div>
+            `;
+        }
+    }
+
+    function showRegisterGuide() {
+        const spinner = document.getElementById('spinner');
+        const statusEl = document.getElementById('status');
+        const mockBtn = document.getElementById('mockBtn');
+        
+        spinner.style.display = 'none';
+        mockBtn.style.display = 'block';
+        statusEl.innerHTML = `
+            <div class="alert alert-info error-box">
+                <h6>🎯 脂安通準備就緒</h6>
+                <p>從 THAS Sandbox 或 EHR 啟動此連結即可使用</p>
+                <p><strong>測試方式：</strong> 點擊上方「測試模式」按鈕</p>
+                <p><small>競賽 Demo：?mode=mock 展示完整血脂決策流程</small></p>
+            </div>
+        `;
+    }
+
+    function goMock() {
+        console.log('🚀 進入 Mock 模式 - 模擬 THAS 血脂資料');
+        document.getElementById('status').innerHTML = '<div class="text-success">Mock 模式啟動！<br>即將載入示範病例...</div>';
+        document.getElementById('spinner').style.display = 'block';
+        setTimeout(() => {
+            window.location.href = '/LipidSafe/index.html?mode=mock';
+        }, 1500);
+    }
+</script>
+</body>
+</html>
