@@ -55,6 +55,15 @@
             background: #4caf50;
             border: none;
             color: white;
+            padding: 0.75rem 2rem;
+            border-radius: 25px;
+            font-weight: 500;
+        }
+        .error-box {
+            margin-top: 1.5rem;
+            padding: 1.5rem;
+            border-radius: 10px;
+            font-size: 0.95rem;
         }
     </style>
 </head>
@@ -69,23 +78,13 @@
     
     <div class="status-text" id="status">正在進行 SMART on FHIR 授權，請稍候...</div>
     
-    <button class="btn mock-btn" id="mockBtn" style="display:none;" onclick="goMock()">測試模式 (跳過授權)</button>
+    <button class="btn mock-btn" id="mockBtn" style="display:none;" onclick="goMock()">
+        🚀 測試模式 (跳過授權)
+    </button>
     
     <div class="footer-note mt-4">
         安全連接您的電子病歷系統 • 保護病患隱私 • 智慧引導血脂達標
     </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/fhirclient@2.5.2/dist/fhir-client.min.js"></script>
-<script>
-    // 檢查是否為測試模式
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('mode') === 'mock') {
-        goMock();
-        return;
-    }
-
-    // 你的 THAS Client ID - 已註冊後替換
-    const CLIENT_ID = '脂安通-2026-lipidsafe';  // ← 這裡放你的真實 ID
-
-    FHIR.oauth2.authori
+<script src="https://cdn.jsdelivr.net/npm/fhirclient@2.5.2/dist/fhir-client
