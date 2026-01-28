@@ -50,19 +50,26 @@
             font-size: 0.9rem;
             color: #757575;
         }
+        .mock-btn {
+            margin-top: 1rem;
+            background: #4caf50;
+            border: none;
+            color: white;
+        }
     </style>
 </head>
 <body>
-
 <div class="launch-card text-center">
     <div class="logo">脂安通</div>
     <div class="slogan">2025 血脂管理決策系統</div>
     
-    <div class="spinner-border text-primary loading-spinner" role="status">
+    <div class="spinner-border text-primary loading-spinner" role="status" id="spinner">
         <span class="visually-hidden">載入中...</span>
     </div>
     
     <div class="status-text" id="status">正在進行 SMART on FHIR 授權，請稍候...</div>
+    
+    <button class="btn mock-btn" id="mockBtn" style="display:none;" onclick="goMock()">測試模式 (跳過授權)</button>
     
     <div class="footer-note mt-4">
         安全連接您的電子病歷系統 • 保護病患隱私 • 智慧引導血脂達標
@@ -71,26 +78,14 @@
 
 <script src="https://cdn.jsdelivr.net/npm/fhirclient@2.5.2/dist/fhir-client.min.js"></script>
 <script>
-    // SMART on FHIR Launch 流程
-    FHIR.oauth2.authorize({
-        'iss': 'https://thas.mohw.gov.tw/v/r4/fhir',  // 您的 FHIR 伺服器基址
-        'client_id': 'your-client-id-here',           // 請替換成您註冊的 Client ID
-        'redirect_uri': window.location.origin + '/index.html',
-        'scope': 'launch/patient patient/Patient.read patient/Condition.read patient/Observation.read patient/MedicationRequest.read',
-        'iss_match': 'any',                           // 測試用，正式可改成 'exact'
-        'pkceMode': 'ifSupported'
-    }).then(client => {
-        console.log('脂安通 SMART Launch 成功，client:', client);
-    }).catch(err => {
-        console.error('脂安通 SMART Launch 失敗:', err);
-        document.getElementById('status').innerHTML = `
-            <div class="alert alert-danger mt-4">
-                授權失敗：${err.message || '請檢查網路或 FHIR 伺服器設定'}
-                <br><small>請聯絡系統管理員或重新整理頁面重試。</small>
-            </div>
-        `;
-    });
-</script>
+    // 檢查是否為測試模式
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('mode') === 'mock') {
+        goMock();
+        return;
+    }
 
-</body>
-</html>
+    // 你的 THAS Client ID - 已註冊後替換
+    const CLIENT_ID = '脂安通-2026-lipidsafe';  // ← 這裡放你的真實 ID
+
+    FHIR.oauth2.authori
